@@ -10,7 +10,6 @@
  */
 #include <stdio.h>
 #include <unistd.h>
-#include <poll.h>
 #include <sys/epoll.h>
 #include <corosync/cpg.h>
 #include <corosync/cfg.h>
@@ -18,6 +17,7 @@
 #include "cluster.h"
 #include "event.h"
 #include "work.h"
+#include "sheep_priv.h"
 
 #define CPG_INIT_RETRY_CNT 10
 #define COROSYNC_MAX_NODES 1024
@@ -41,8 +41,6 @@ static struct cpg_node cpg_nodes[COROSYNC_MAX_NODES];
 static size_t nr_cpg_nodes;
 static bool self_elect;
 static bool join_finished;
-static int cpg_fd;
-static size_t nr_majority; /* used for network partition detection */
 
 /* event types which are dispatched in corosync_dispatch() */
 enum corosync_event_type {
@@ -358,23 +356,6 @@ static bool update_join_status(struct corosync_event *cevent)
 static void __corosync_dispatch(void)
 {
 	struct corosync_event *cevent;
-	struct pollfd pfd = {
-		.fd = cpg_fd,
-		.events = POLLIN,
-	};
-
-	if (poll(&pfd, 1, 0)) {
-		/*
-		 * Corosync dispatches leave events one by one even
-		 * when network partition has occurred.  To count the
-		 * number of alive nodes correctly, we postpone
-		 * processing events if there are incoming ones.
-		 */
-		sd_debug("wait for a next dispatch event");
-		return;
-	}
-
-	nr_majority = 0;
 
 	while (!list_empty(&corosync_block_event_list) ||
 	       !list_empty(&corosync_nonblock_event_list)) {
@@ -550,33 +531,23 @@ static void cdrv_cpg_confchg(cpg_handle_t handle,
 	struct cpg_node joined_sheep[COROSYNC_MAX_NODES];
 	struct cpg_node left_sheep[COROSYNC_MAX_NODES];
 	bool promote = true;
+	struct vnode_info *vinfo;
 
 	sd_debug("mem:%zu, joined:%zu, left:%zu", member_list_entries,
 		 joined_list_entries, left_list_entries);
-
-	/* check network partition */
-	if (left_list_entries) {
-		if (nr_majority == 0) {
-			size_t total = member_list_entries + left_list_entries;
-
-			/*
-			 * we need at least 3 nodes to handle network
-			 * partition failure
-			 */
-			if (total > 2)
-				nr_majority = total / 2 + 1;
-		}
-
-		if (member_list_entries == 0)
-			panic("NIC failure?");
-		if (member_list_entries < nr_majority)
-			panic("Network partition is detected");
-	}
 
 	/* convert cpg_address to cpg_node */
 	build_cpg_node_list(member_sheep, member_list, member_list_entries);
 	build_cpg_node_list(left_sheep, left_list, left_list_entries);
 	build_cpg_node_list(joined_sheep, joined_list, joined_list_entries);
+
+	vinfo = get_vnode_info();
+	if (vinfo->nr_nodes / 2 + 1 <= left_list_entries)
+		panic("a number of leaving node (%zu) is larger than majority"
+		      " (%d), network partition", left_list_entries,
+		      vinfo->nr_nodes / 2 + 1);
+	else
+		put_vnode_info(vinfo);
 
 	/* dispatch leave_handler */
 	for (i = 0; i < left_list_entries; i++) {
@@ -714,7 +685,7 @@ out:
 
 static int corosync_init(const char *option)
 {
-	int ret, retry_cnt = 0;
+	int ret, fd, retry_cnt = 0;
 	uint32_t nodeid;
 	cpg_callbacks_t cb = {
 		.cpg_deliver_fn = cdrv_cpg_deliver,
@@ -759,13 +730,13 @@ again:
 	this_node.nodeid = nodeid;
 	this_node.pid = getpid();
 
-	ret = cpg_fd_get(cpg_handle, &cpg_fd);
+	ret = cpg_fd_get(cpg_handle, &fd);
 	if (ret != CS_OK) {
 		sd_err("failed to get cpg file descriptor (%d)", ret);
 		return -1;
 	}
 
-	ret = register_event(cpg_fd, corosync_handler, NULL);
+	ret = register_event(fd, corosync_handler, NULL);
 	if (ret) {
 		sd_err("failed to register corosync event handler (%d)", ret);
 		return -1;
