@@ -1,4 +1,4 @@
-#! /bin/bash
+G#! /bin/bash
 
 # Test iSCSI multipath functionality
 # heavly depends on Debian or Ubuntu conventions
@@ -93,7 +93,7 @@ multipaths {
         multipath {
                 wwid                    $SCSI_ID
                 alias                   sheepdog-iscsi
-                path_grouping_policy    multibus
+                path_grouping_policy    failover
                 path_checker            readsector0
                 path_selector           "round-robin 0"
                 failback                manual
