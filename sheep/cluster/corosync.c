@@ -542,12 +542,15 @@ static void cdrv_cpg_confchg(cpg_handle_t handle,
 	build_cpg_node_list(joined_sheep, joined_list, joined_list_entries);
 
 	vinfo = get_vnode_info();
-	if (vinfo->nr_nodes / 2 + 1 <= left_list_entries)
-		panic("a number of leaving node (%zu) is larger than majority"
-		      " (%d), network partition", left_list_entries,
-		      vinfo->nr_nodes / 2 + 1);
-	else
-		put_vnode_info(vinfo);
+	if (vinfo) {
+		/* !vinfo is true during joining */
+		if (vinfo->nr_nodes / 2 + 1 <= left_list_entries)
+			panic("a number of leaving node (%zu) is larger than"
+			      " majority (%d), network partition",
+			      left_list_entries, vinfo->nr_nodes / 2 + 1);
+		else
+			put_vnode_info(vinfo);
+	}
 
 	/* dispatch leave_handler */
 	for (i = 0; i < left_list_entries; i++) {
