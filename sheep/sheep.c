@@ -462,6 +462,8 @@ static int create_work_queues(void)
 	    !sys->areq_wqueue)
 			return -1;
 
+	register_util_wq(sys->io_wqueue);
+
 	return 0;
 }
 
