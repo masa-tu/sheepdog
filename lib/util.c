@@ -350,6 +350,43 @@ char *chomp(char *str)
 	return str;
 }
 
+struct purge_work {
+	struct work work;
+
+	bool is_dir;
+	char path[PATH_MAX];
+};
+
+static void purge_work_fn(struct work *work)
+{
+	struct purge_work *pw = container_of(work, struct purge_work, work);
+	int ret;
+
+	if (pw->is_dir)
+		ret = rmdir_r(pw->path);
+	else
+		ret = unlink(pw->path);
+
+	if (ret)
+		sd_err("failed to remove %s %s: %m",
+		       pw->is_dir ? "directory" : "file", pw->path);
+	/*
+	 * We cannot check and do something even above rmdir_r() and unlink()
+	 * cause error. Actually, sd_store->cleanup() (typical user of
+	 * purge_directory())call of cluster_recovery_completion() ignores its
+	 * error code.
+	 */
+}
+
+static void purge_work_done(struct work *work)
+{
+	struct purge_work *pw = container_of(work, struct purge_work, work);
+
+	sd_debug("purging %s %s done",
+		 pw->is_dir ? "directory" : "file", pw->path);
+	free(pw);
+}
+
 /* Purge directory recursively */
 int purge_directory(const char *dir_path)
 {
@@ -376,15 +413,32 @@ int purge_directory(const char *dir_path)
 			sd_err("failed to stat %s: %m", path);
 			goto out;
 		}
-		if (S_ISDIR(s.st_mode))
-			ret = rmdir_r(path);
-		else
-			ret = unlink(path);
 
-		if (ret != 0) {
-			sd_err("failed to remove %s %s: %m",
-			       S_ISDIR(s.st_mode) ? "directory" : "file", path);
-			goto out;
+		if (util_wqueue) {
+			struct purge_work *w;
+
+			w = xzalloc(sizeof(*w));
+
+			w->work.fn = purge_work_fn;
+			w->work.done = purge_work_done;
+
+			w->is_dir = S_ISDIR(s.st_mode);
+			strcpy(w->path, path);
+
+			queue_work(util_wqueue, &w->work);
+		} else {
+			if (S_ISDIR(s.st_mode))
+				ret = rmdir_r(path);
+			else
+				ret = unlink(path);
+
+			if (ret != 0) {
+				sd_err("failed to remove %s %s: %m",
+				       S_ISDIR(s.st_mode) ?
+				       "directory" : "file",
+				       path);
+				goto out;
+			}
 		}
 	}
 out:
