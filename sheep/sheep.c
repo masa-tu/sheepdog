@@ -420,6 +420,8 @@ static size_t get_nr_nodes(void)
 
 static int create_work_queues(void)
 {
+	struct work_queue *util_wq;
+
 	if (init_work_queue(get_nr_nodes))
 		return -1;
 
@@ -439,6 +441,11 @@ static int create_work_queues(void)
 	if (!sys->gateway_wqueue || !sys->io_wqueue || !sys->recovery_wqueue ||
 	    !sys->deletion_wqueue || !sys->block_wqueue || !sys->md_wqueue)
 			return -1;
+
+	util_wq = create_ordered_work_queue("util");
+	if (!util_wq)
+		return -1;
+	register_util_wq(util_wq);
 
 	return 0;
 }
