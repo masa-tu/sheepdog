@@ -360,4 +360,7 @@ static inline bool is_stdout_console(void)
 extern mode_t sd_def_fmode;
 extern mode_t sd_def_dmode;
 
+struct work_queue;
+void register_util_wq(struct work_queue *wq);
+
 #endif
